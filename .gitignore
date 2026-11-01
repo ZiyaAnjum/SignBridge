@@ -1,0 +1,27 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.venv/
+ENV/
+
+# Data & Models
+data/raw/
+data/processed/
+*.npy
+*.npz
+checkpoints/
+models/*.h5
+models/*.pt
+models/*.onnx
+models/*.tflite
+
+# Logs & System
+*.log
+.DS_Store
+Thumbs.db
+
