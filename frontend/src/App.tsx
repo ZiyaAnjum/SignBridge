@@ -8,6 +8,7 @@ import { Timeline } from './components/conversation/Timeline';
 import { SentenceConfirmation } from './components/conversation/SentenceConfirmation';
 import { EmergencyBanner } from './components/alerts/EmergencyBanner';
 import { ErrorBanner } from './components/alerts/ErrorBanner';
+import { RecordPage } from './components/record/RecordPage';
 import {
   ConversationMessage,
   Language,
@@ -16,6 +17,11 @@ import {
 } from './types';
 
 export const App: React.FC = () => {
+  const [activeView, setActiveView] = useState<'workplace' | 'record'>(
+    typeof window !== 'undefined' && window.location.pathname === '/record'
+      ? 'record'
+      : 'workplace'
+  );
   const [scenario, setScenario] = useState<Scenario>('hospital');
   const [selectedLanguage, setSelectedLanguage] = useState<Language>('english');
   const [uiState, setUiState] = useState<UIState>('recognising');
@@ -115,6 +121,19 @@ export const App: React.FC = () => {
     setMessages((prev) => [...prev, newMessage]);
   };
 
+  if (activeView === 'record') {
+    return (
+      <RecordPage
+        onBackToApp={() => {
+          setActiveView('workplace');
+          if (typeof window !== 'undefined' && window.location.pathname === '/record') {
+            window.history.pushState({}, '', '/');
+          }
+        }}
+      />
+    );
+  }
+
   return (
     <div className="flex min-h-screen flex-col bg-bg text-ink">
       {/* 1. Global Header */}
@@ -122,6 +141,13 @@ export const App: React.FC = () => {
         scenario={scenario}
         onScenarioChange={setScenario}
         isConnected={uiState !== 'error'}
+        activeView={activeView}
+        onNavigate={(view) => {
+          setActiveView(view);
+          if (typeof window !== 'undefined') {
+            window.history.pushState({}, '', view === 'record' ? '/record' : '/');
+          }
+        }}
       />
 
       {/* 2. Interactive Design States Switcher (Inspect all 8 states) */}

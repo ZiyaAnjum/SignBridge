@@ -33,18 +33,27 @@ SignBridge/
 ├── ml-service/                   # FastAPI + WebSockets + PyTorch backend
 │   ├── app/
 │   │   ├── main.py               # FastAPI entry point & CORS
-│   │   ├── core/config.py        # Configuration settings
-│   │   ├── routes/health.py      # GET /health
-│   │   ├── routes/websocket.py   # WS /ws/landmarks
+│   │   ├── core/
+│   │   │   ├── config.py         # Configuration settings
+│   │   │   └── normalization.py  # Canonical landmark normalization
+│   │   ├── ml/
+│   │   │   └── architecture.py   # SignBridgeGRU model definition
+│   │   ├── routes/
+│   │   │   ├── health.py         # GET /health
+│   │   │   ├── samples.py        # POST /samples, GET /samples/counts
+│   │   │   └── websocket.py      # WS /ws/landmarks
 │   │   └── schemas/protocol.py   # Pydantic v2 schemas
 │   ├── data/landmarks/           # (.gitignored) 30-frame landmark sequences
 │   ├── models/                   # (.gitignored) Trained .pt / .onnx weights
-│   ├── scripts/                  # Data collection & model training
+│   ├── scripts/
+│   │   ├── collect_data.py       # MediaPipe Holistic webcam landmark recorder
+│   │   ├── extract_landmarks.py  # Offline video landmark extraction
+│   │   └── train.py              # Sequence model training
+│   ├── tests/                    # Normalization parity test suite
 │   └── requirements.txt
-├── scripts/
-│   └── collect_data.py           # MediaPipe Holistic webcam landmark recorder
 ├── docs/
 │   ├── DESIGN.md                 # Design system tokens and UI rules
+│   ├── LANDMARKS.md              # Landmark coordinate spec, normalization, 15 FPS
 │   └── vocabulary.md             # 42-word ISL vocabulary (Hospital & Bank)
 ├── rules.md                      # Monorepo coding conventions & privacy rules
 └── README.md
@@ -101,20 +110,24 @@ SignBridge/
 
 ### Recording Landmark Training Data
 
-Record 30-frame skeletal coordinate sequences into `data/landmarks/<label>/`:
+Record 30-frame skeletal coordinate sequences into `ml-service/data/landmarks/<signer>/<label>/sample_XXXX.npy` at fixed 15 FPS:
 
 ```powershell
+cd ml-service
+
 # Record all 42 words (40 samples each):
-python scripts/collect_data.py --samples 40
+python scripts/collect_data.py --signer signer_01 --samples 40
 
 # Record specific medical/banking words:
-python scripts/collect_data.py --words doctor,fever,medicine,account,emergency --samples 30
+python scripts/collect_data.py --signer signer_01 --words doctor,fever,medicine,account,emergency --samples 30
 
 # Controls during recording:
-#   [SPACE] : Trigger 3-second countdown and record 30 frames
+#   [SPACE] : Trigger 3-second countdown and record 30 frames at 15 FPS
 #   [s]     : Skip to next word
 #   [q]     : Quit recording session
 ```
+
+Alternatively, use the browser-based recorder at **[http://localhost:5173/record](http://localhost:5173/record)** (or click **Record Samples** in the header).
 
 ---
 

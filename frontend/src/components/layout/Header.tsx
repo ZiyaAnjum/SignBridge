@@ -6,12 +6,16 @@ interface HeaderProps {
   scenario: Scenario;
   onScenarioChange: (scenario: Scenario) => void;
   isConnected: boolean;
+  activeView: 'workplace' | 'record';
+  onNavigate: (view: 'workplace' | 'record') => void;
 }
 
 export const Header: React.FC<HeaderProps> = ({
   scenario,
   onScenarioChange,
   isConnected,
+  activeView,
+  onNavigate,
 }) => {
   return (
     <header className="border-b border-border bg-surface px-6 py-4">
@@ -34,8 +38,34 @@ export const Header: React.FC<HeaderProps> = ({
           </div>
         </div>
 
-        {/* Controls: Scenario Switcher & Connection Status */}
+        {/* Controls: View Nav, Scenario Switcher & Connection Status */}
         <div className="flex items-center gap-4">
+          {/* View Nav */}
+          <div className="flex items-center rounded-input border border-border bg-bg p-1">
+            <button
+              type="button"
+              onClick={() => onNavigate('workplace')}
+              className={`rounded-input px-3 py-1.5 text-xs font-semibold transition-colors min-h-[36px] ${
+                activeView === 'workplace'
+                  ? 'bg-ink text-surface'
+                  : 'text-ink hover:bg-surface'
+              }`}
+            >
+              Workplace
+            </button>
+            <button
+              type="button"
+              onClick={() => onNavigate('record')}
+              className={`rounded-input px-3 py-1.5 text-xs font-semibold transition-colors min-h-[36px] ${
+                activeView === 'record'
+                  ? 'bg-ink text-surface'
+                  : 'text-ink hover:bg-surface'
+              }`}
+            >
+              Record Samples
+            </button>
+          </div>
+
           {/* Scenario Selector */}
           <div
             className="flex items-center rounded-input border border-border bg-bg p-1"

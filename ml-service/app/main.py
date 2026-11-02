@@ -2,11 +2,11 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.core.config import settings
-from app.routes import health, websocket
+from app.routes import health, samples, websocket
 
 app = FastAPI(
     title="SignBridge ML Service",
-    description="Live ISL landmark recognition and translation WebSocket/REST API.",
+    description="Live ISL landmark recognition, sample collection, and translation API.",
     version="0.1.0",
 )
 
@@ -21,6 +21,7 @@ app.add_middleware(
 
 # Route registration
 app.include_router(health.router)
+app.include_router(samples.router)
 app.include_router(websocket.router)
 
 
@@ -31,6 +32,6 @@ async def root():
         "status": "online",
         "docs": "/docs",
         "health": "/health",
+        "samples": "/samples/counts",
         "ws_landmarks": "/ws/landmarks",
     }
-
