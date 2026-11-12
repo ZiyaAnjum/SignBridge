@@ -22,6 +22,7 @@ These conventions are strictly enforced across all components of the SignBridge 
 ## 3. Privacy-First Data & ML Policy
 - **Zero Video / Image Storage**: Under no circumstances should raw webcam video frames, photographs, or streaming buffers be saved to disk, logged, cached, or transmitted off-device.
 - **Landmark Coordinates Only**: Only processed numeric skeletal coordinates (`(30, 225)` floats representing Pose and Hand keypoints) may be stored in `data/landmarks/` or streamed over WebSockets.
+- **Never Log Landmark Arrays or Payloads**: Never log raw coordinate values, landmark arrays, or incoming WebSocket payload bodies to console, file logs, or error trackers. Log only operational metadata (frame counts, recognized labels, confidence scores, latencies, connection states).
 - **Compliance**: Adhere to healthcare and banking patient/customer confidentiality standards.
 
 ---

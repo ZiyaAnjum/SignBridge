@@ -542,19 +542,22 @@ def run_pipeline(
     lr: float = 0.001,
     patience: int = 10,
     leave_one_out: Optional[str] = None,
+    cross_validate: bool = False,
     force: bool = False,
     dry_run: bool = False,
     seed: int = 42,
 ) -> int:
-    """Executes the complete end-to-end training and evaluation pipeline."""
+    """Executes the complete training, cross-validation, and evaluation pipeline."""
     set_seed(seed)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     print("=" * 76)
     print(" SignBridge ISL Neural Sequence Classifier Training")
-    print(f" Timestamp : {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-    print(f" Device    : {device}")
-    print(f" Dry Run   : {dry_run}")
+    print(f" Timestamp   : {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    print(f" Random Seed : {seed}")
+    print(f" Device      : {device}")
+    print(f" Dry Run     : {dry_run}")
+    print(f" CV Mode     : {cross_validate}")
     print("=" * 76)
 
     # Setup target classes
@@ -564,7 +567,6 @@ def run_pipeline(
         if "idle" not in target_classes:
             target_classes.append("idle")
     elif dry_run:
-        # Default dry run subset for quick verification
         target_classes = ["yes", "no", "help", "emergency", "doctor", "water", "thank_you", "idle"]
     else:
         target_classes = vocab_labels
@@ -573,16 +575,22 @@ def run_pipeline(
     idx_to_label = {idx: lbl for idx, lbl in enumerate(target_classes)}
     num_classes = len(target_classes)
 
-    temp_dry_run_dir = None
+    temp_dry_run_data_dir = None
+    temp_dry_run_artifacts_dir = None
+
     try:
         if dry_run:
             print("\n[DRY RUN MODE ENABLED]")
             print("Creating synthetic dataset in temporary directory for pipeline verification...")
-            temp_dry_run_dir = tempfile.TemporaryDirectory()
-            effective_data_dir = create_synthetic_dry_run_dataset(Path(temp_dry_run_dir.name), target_classes)
+            temp_dry_run_data_dir = tempfile.TemporaryDirectory()
+            effective_data_dir = create_synthetic_dry_run_dataset(Path(temp_dry_run_data_dir.name), target_classes)
+            # Write artifacts to temporary directory, NEVER to models/
+            temp_dry_run_artifacts_dir = tempfile.TemporaryDirectory()
+            effective_output_dir = Path(temp_dry_run_artifacts_dir.name)
             epochs = min(epochs, 2)  # Cap dry-run at 2 epochs
         else:
             effective_data_dir = data_dir
+            effective_output_dir = output_dir
             # Enforce readiness check on real data
             is_ready, _ = run_data_check(effective_data_dir, words=target_classes)
             if not is_ready and not force:
@@ -600,12 +608,105 @@ def run_pipeline(
             print("To verify the training pipeline end-to-end with synthetic data, run with --dry-run.")
             return 1
 
+        signers = sorted(list(data_by_signer.keys()))
         print(f"\n[DATASET SUMMARY]")
         print(f"  Target Classes : {num_classes}")
         print(f"  Total Samples  : {total_samples}")
-        print(f"  Signers Found  : {len(data_by_signer)} ({', '.join(sorted(data_by_signer.keys()))})")
+        print(f"  Signers Found  : {len(signers)} ({', '.join(signers)})")
 
-        # Split data
+        # -------------------------------------------------------------
+        # CROSS-VALIDATION MODE (--cross-validate)
+        # -------------------------------------------------------------
+        if cross_validate:
+            if len(signers) < 3 and not force:
+                print(f"\n[ERROR] Cross-validation requires at least 3 signers, found {len(signers)}. Pass --force to override.")
+                return 1
+
+            print("\n" + "=" * 76)
+            print(" EXECUTING LEAVE-ONE-SIGNER-OUT CROSS-VALIDATION")
+            print("=" * 76)
+
+            cv_results: Dict[str, float] = {}
+
+            for fold_idx, held_out in enumerate(signers, 1):
+                print(f"\n>>> Fold {fold_idx}/{len(signers)}: Holding out signer '{held_out}' as Test Set")
+                set_seed(seed + fold_idx)
+
+                train_samples, val_samples, test_samples, split_info = split_data_by_signer(
+                    data_by_signer=data_by_signer,
+                    label_to_idx=label_to_idx,
+                    leave_one_out_signer=held_out,
+                    force=force or dry_run,
+                    seed=seed,
+                )
+
+                train_loader = DataLoader(
+                    SignBridgeDataset(train_samples, augment=True),
+                    batch_size=max(1, min(batch_size, len(train_samples))),
+                    shuffle=True,
+                )
+                val_loader = DataLoader(
+                    SignBridgeDataset(val_samples, augment=False),
+                    batch_size=max(1, min(batch_size, len(val_samples))),
+                    shuffle=False,
+                )
+                test_loader = DataLoader(
+                    SignBridgeDataset(test_samples, augment=False),
+                    batch_size=max(1, min(batch_size, len(test_samples))),
+                    shuffle=False,
+                )
+
+                class_weights = compute_class_weights(train_samples, num_classes)
+                fold_model = SignBridgeGRU(
+                    num_classes=num_classes,
+                    input_size=225,
+                    hidden_size=64,
+                    num_layers=1,
+                    bidirectional=True,
+                    dropout=0.2,
+                ).to(device)
+
+                fold_model, _ = train_model(
+                    model=fold_model,
+                    train_loader=train_loader,
+                    val_loader=val_loader,
+                    class_weights=class_weights,
+                    device=device,
+                    epochs=epochs,
+                    lr=lr,
+                    patience=patience,
+                )
+
+                fold_output_dir = effective_output_dir / f"cv_fold_{held_out}"
+                acc, _, _ = evaluate_model(
+                    model=fold_model,
+                    test_loader=test_loader,
+                    target_classes=target_classes,
+                    device=device,
+                    output_dir=fold_output_dir,
+                )
+                cv_results[held_out] = acc
+
+            # Print Cross-Validation Summary
+            accuracies = list(cv_results.values())
+            mean_acc = float(np.mean(accuracies))
+            std_acc = float(np.std(accuracies))
+
+            print("\n" + "=" * 76)
+            print(" LEAVE-ONE-SIGNER-OUT CROSS-VALIDATION SUMMARY")
+            print("=" * 76)
+            print(f"  {'Held-Out Signer':<24} | {'Test Accuracy':<15}")
+            print(f"  {'-'*24}-+-{'-'*15}")
+            for s, a in cv_results.items():
+                print(f"  {s:<24} | {a * 100:>12.2f}%")
+            print(f"  {'-'*24}-+-{'-'*15}")
+            print(f"  Mean Accuracy across signers : {mean_acc * 100:.2f}% (std: {std_acc * 100:.2f}%)")
+            print("=" * 76 + "\n")
+            return 0
+
+        # -------------------------------------------------------------
+        # STANDARD SINGLE SPLIT TRAINING
+        # -------------------------------------------------------------
         train_samples, val_samples, test_samples, split_info = split_data_by_signer(
             data_by_signer=data_by_signer,
             label_to_idx=label_to_idx,
@@ -619,7 +720,6 @@ def run_pipeline(
         print(f"  Val Samples   : {len(val_samples):>5}")
         print(f"  Test Samples  : {len(test_samples):>5}")
 
-        # PyTorch DataLoaders
         train_dataset = SignBridgeDataset(train_samples, augment=True)
         val_dataset = SignBridgeDataset(val_samples, augment=False)
         test_dataset = SignBridgeDataset(test_samples, augment=False)
@@ -629,10 +729,8 @@ def run_pipeline(
         val_loader = DataLoader(val_dataset, batch_size=effective_batch_size, shuffle=False)
         test_loader = DataLoader(test_dataset, batch_size=effective_batch_size, shuffle=False)
 
-        # Class weights
         class_weights = compute_class_weights(train_samples, num_classes)
 
-        # Initialize Model
         model = SignBridgeGRU(
             num_classes=num_classes,
             input_size=225,
@@ -642,7 +740,6 @@ def run_pipeline(
             dropout=0.2,
         ).to(device)
 
-        # Train model
         model, history = train_model(
             model=model,
             train_loader=train_loader,
@@ -654,39 +751,43 @@ def run_pipeline(
             patience=patience,
         )
 
-        # Evaluate on test set
         test_acc, test_report, confused_pairs = evaluate_model(
             model=model,
             test_loader=test_loader,
             target_classes=target_classes,
             device=device,
-            output_dir=output_dir,
+            output_dir=effective_output_dir,
         )
 
         # Save artifacts
-        output_dir.mkdir(parents=True, exist_ok=True)
-        model_path = output_dir / "signbridge_gru.pt"
+        effective_output_dir.mkdir(parents=True, exist_ok=True)
+        model_path = effective_output_dir / "signbridge_gru.pt"
         torch.save(model.state_dict(), model_path)
 
-        label_map_path = output_dir / "label_map.json"
+        label_map_path = effective_output_dir / "label_map.json"
         metadata = {
             "model_type": "SignBridgeGRU",
-            "created_at": datetime.datetime.now().isoformat(),
-            "input_size": 225,
-            "sequence_length": 30,
-            "hidden_size": 64,
-            "num_layers": 1,
-            "bidirectional": True,
-            "dropout": 0.2,
-            "num_classes": num_classes,
+            "landmark_layout_version": "v1-225",
+            "fps": 15,
+            "window_length": 30,
+            "normalization_version": "v1-shoulder-aspect",
             "classes": target_classes,
             "label_to_id": label_to_idx,
             "id_to_label": {str(k): v for k, v in idx_to_label.items()},
+            "training_date": datetime.datetime.now().isoformat(),
+            "signer_dependent": split_info["evaluation_mode"] == "signer-dependent",
+            "random_seed": seed,
             "train_signers": split_info["train_signers"],
             "val_signers": split_info["val_signers"],
             "test_signers": split_info["test_signers"],
             "evaluation_mode": split_info["evaluation_mode"],
             "test_accuracy": round(test_acc, 4),
+            "num_classes": num_classes,
+            "input_size": 225,
+            "hidden_size": 64,
+            "num_layers": 1,
+            "bidirectional": True,
+            "dropout": 0.2,
         }
         with open(label_map_path, "w", encoding="utf-8") as f:
             json.dump(metadata, f, indent=2)
@@ -710,14 +811,16 @@ def run_pipeline(
         print("\n[SAVED ARTIFACTS]")
         print(f"  * Model weights   : {model_path}")
         print(f"  * Label metadata  : {label_map_path}")
-        print(f"  * Confusion matrix: {output_dir / 'confusion_matrix.png'}")
+        print(f"  * Confusion matrix: {effective_output_dir / 'confusion_matrix.png'}")
         print("=" * 76 + "\n")
 
         return 0
 
     finally:
-        if temp_dry_run_dir is not None:
-            temp_dry_run_dir.cleanup()
+        if temp_dry_run_data_dir is not None:
+            temp_dry_run_data_dir.cleanup()
+        if temp_dry_run_artifacts_dir is not None:
+            temp_dry_run_artifacts_dir.cleanup()
 
 
 def main():
@@ -771,6 +874,11 @@ def main():
         help="Specific signer to hold out for test evaluation (e.g. 'signer3')",
     )
     parser.add_argument(
+        "--cross-validate",
+        action="store_true",
+        help="Run leave-one-signer-out cross-validation across all signers and report mean/std accuracy.",
+    )
+    parser.add_argument(
         "--force",
         action="store_true",
         help="Override readiness checks and train even with insufficient signers or samples.",
@@ -799,6 +907,7 @@ def main():
         lr=args.lr,
         patience=args.patience,
         leave_one_out=args.leave_one_signer_out,
+        cross_validate=args.cross_validate,
         force=args.force,
         dry_run=args.dry_run,
         seed=args.seed,

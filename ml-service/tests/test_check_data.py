@@ -59,7 +59,7 @@ def test_duplicate_detection_and_readiness():
 
         # Signers and classes
         signers = ["signer1", "signer2", "signer3"]
-        classes = ["yes", "no", "help"]
+        classes = ["yes", "no", "help", "idle"]
 
         # Base sample with valid shoulders and hands
         base_sample = np.zeros((30, 225), dtype=np.float32)

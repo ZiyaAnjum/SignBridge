@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   Camera,
   Play,
@@ -10,8 +10,7 @@ import {
   Database,
   Layers,
 } from 'lucide-react';
-import { initializeMediaPipe, extractLandmarksFromVideo } from '../../lib/mediapipe';
-import { normalizeSequence } from '../../lib/normalization';
+import { useCameraLandmarks } from '../../hooks/useCameraLandmarks';
 
 interface RecordPageProps {
   onBackToApp: () => void;
@@ -26,8 +25,6 @@ const VOCAB_WORDS = [
 ];
 
 const SIGNER_REGEX = /^[a-z0-9_]+$/;
-const TARGET_FPS = 15;
-const FRAME_INTERVAL_MS = 1000 / TARGET_FPS; // 66.67ms
 const TOTAL_FRAMES = 30;
 
 export const RecordPage: React.FC<RecordPageProps> = ({ onBackToApp }) => {
@@ -44,12 +41,35 @@ export const RecordPage: React.FC<RecordPageProps> = ({ onBackToApp }) => {
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
-  const videoRef = useRef<HTMLVideoElement>(null);
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-  const recordingRef = useRef(false);
+  const isRecordingRef = useRef(false);
+  const framesBufferRef = useRef<Float32Array[]>([]);
+
+  // Frame listener from shared 15 FPS pipeline
+  const handleFrame = useCallback((landmarks: Float32Array) => {
+    if (!isRecordingRef.current) return;
+
+    framesBufferRef.current.push(new Float32Array(landmarks));
+    if (framesBufferRef.current.length >= TOTAL_FRAMES) {
+      isRecordingRef.current = false;
+      setRecordedFrames([...framesBufferRef.current]);
+      setRecordingState('review');
+    }
+  }, []);
+
+  // Shared 15 FPS camera capture pipeline
+  const {
+    videoRef,
+    canvasRef,
+    cameraError,
+    isCameraActive,
+  } = useCameraLandmarks({
+    enabled: true,
+    showOverlay: true,
+    onFrame: handleFrame,
+  });
 
   // Load sample counts from backend
-  const fetchCounts = async () => {
+  const fetchCounts = useCallback(async () => {
     try {
       const res = await fetch('http://localhost:8000/samples/counts');
       if (res.ok) {
@@ -62,28 +82,11 @@ export const RecordPage: React.FC<RecordPageProps> = ({ onBackToApp }) => {
     } catch {
       // Backend may be offline
     }
-  };
+  }, []);
 
   useEffect(() => {
     fetchCounts();
-    initializeMediaPipe();
-
-    let stream: MediaStream | null = null;
-    navigator.mediaDevices?.getUserMedia({ video: { width: 1280, height: 720 } })
-      .then((s) => {
-        stream = s;
-        if (videoRef.current) {
-          videoRef.current.srcObject = s;
-        }
-      })
-      .catch((err) => {
-        setErrorMessage('Camera access denied or unavailable: ' + err.message);
-      });
-
-    return () => {
-      stream?.getTracks().forEach((track) => track.stop());
-    };
-  }, []);
+  }, [fetchCounts]);
 
   // Countdown & Recording Routine
   const startRecordingFlow = () => {
@@ -93,6 +96,8 @@ export const RecordPage: React.FC<RecordPageProps> = ({ onBackToApp }) => {
     }
     setErrorMessage(null);
     setStatusMessage(null);
+    framesBufferRef.current = [];
+    setRecordedFrames([]);
     setRecordingState('countdown');
     setCountdown(3);
 
@@ -103,39 +108,10 @@ export const RecordPage: React.FC<RecordPageProps> = ({ onBackToApp }) => {
         setCountdown(count);
       } else {
         clearInterval(countTimer);
-        runCapture();
+        setRecordingState('recording');
+        isRecordingRef.current = true;
       }
     }, 800);
-  };
-
-  const runCapture = () => {
-    setRecordingState('recording');
-    recordingRef.current = true;
-    const frames: Float32Array[] = [];
-    let lastTimestamp = 0;
-
-    const captureLoop = () => {
-      if (!recordingRef.current) return;
-      const now = performance.now();
-
-      if (now - lastTimestamp >= FRAME_INTERVAL_MS) {
-        lastTimestamp = now;
-        if (videoRef.current) {
-          const frameLandmarks = extractLandmarksFromVideo(videoRef.current, now);
-          frames.push(frameLandmarks);
-        }
-      }
-
-      if (frames.length < TOTAL_FRAMES) {
-        requestAnimationFrame(captureLoop);
-      } else {
-        recordingRef.current = false;
-        setRecordedFrames(frames);
-        setRecordingState('review');
-      }
-    };
-
-    requestAnimationFrame(captureLoop);
   };
 
   const handleSave = async () => {
@@ -166,12 +142,14 @@ export const RecordPage: React.FC<RecordPageProps> = ({ onBackToApp }) => {
       setRecordingState('idle');
       setRecordedFrames([]);
       fetchCounts();
-    } catch (err: any) {
-      setErrorMessage(err.message || 'Error saving sample');
+    } catch (err: unknown) {
+      const errDetail = err instanceof Error ? err.message : 'Error saving sample';
+      setErrorMessage(errDetail);
     }
   };
 
   const handleRetry = () => {
+    framesBufferRef.current = [];
     setRecordedFrames([]);
     setRecordingState('idle');
     setErrorMessage(null);
@@ -189,7 +167,7 @@ export const RecordPage: React.FC<RecordPageProps> = ({ onBackToApp }) => {
             <button
               type="button"
               onClick={onBackToApp}
-              className="flex items-center gap-2 rounded-input border border-border bg-bg px-3 py-2 text-xs font-bold text-ink hover:bg-surface"
+              className="flex items-center gap-2 rounded-input border border-border bg-bg px-3 py-2 text-xs font-bold text-ink hover:bg-surface min-h-[44px]"
             >
               <ArrowLeft className="h-4 w-4" aria-hidden="true" />
               <span>Back to Workplace</span>
@@ -198,32 +176,36 @@ export const RecordPage: React.FC<RecordPageProps> = ({ onBackToApp }) => {
               <h1 className="font-serif text-xl font-bold text-ink">
                 Landmark Data Recorder
               </h1>
-              <p className="font-sans text-xs text-ink-muted">
-                Record 30-frame ISL coordinate sequences at 15 FPS (no video stored)
+              <p className="text-xs text-ink-muted">
+                15 FPS Browser Skeletal Extraction (30 frames / 2.0s per sample)
               </p>
             </div>
           </div>
 
-          <div className="flex items-center gap-3">
-            <div className="flex items-center gap-2 rounded-input border border-border bg-bg px-3 py-1.5 text-xs font-semibold text-ink">
-              <Database className="h-4 w-4 text-accent" aria-hidden="true" />
-              <span>Total Dataset: {sampleCounts.total} samples</span>
+          <div className="flex items-center gap-4 text-xs font-semibold">
+            <div className="flex items-center gap-1.5 rounded-input border border-border bg-bg px-3 py-1.5">
+              <Database className="h-4 w-4 text-accent" />
+              <span>Total Dataset Samples:</span>
+              <strong className="text-ink">{sampleCounts.total}</strong>
             </div>
           </div>
         </div>
       </header>
 
-      {/* Main Content Area */}
+      {/* Main Workspace */}
       <main className="mx-auto flex w-full max-w-7xl flex-1 flex-col gap-6 p-6 lg:flex-row">
-        {/* Left: Video Preview & Recording Canvas */}
+        {/* Left: Camera Feed & Landmarks */}
         <div className="flex flex-1 flex-col">
           <div className="rounded-card border border-border bg-surface p-4">
             <div className="mb-3 flex items-center justify-between">
-              <span className="font-sans text-xs font-bold uppercase tracking-wider text-ink-muted">
-                Camera Feed (Display mirrored, coordinates unmirrored)
-              </span>
-              <span className="text-xs text-accent font-semibold">
-                15 FPS · 30 frames
+              <div className="flex items-center gap-2">
+                <Camera className="h-5 w-5 text-accent" />
+                <h2 className="font-serif text-lg font-bold text-ink">
+                  Capture Preview (Mirrored View)
+                </h2>
+              </div>
+              <span className="text-xs text-ink-muted">
+                Raw coordinates are stored unmirrored (30, 225)
               </span>
             </div>
 
@@ -242,7 +224,7 @@ export const RecordPage: React.FC<RecordPageProps> = ({ onBackToApp }) => {
               {recordingState === 'recording' && (
                 <div className="absolute top-4 left-4 z-20 flex items-center gap-2 rounded-input bg-emergency px-3 py-1.5 text-xs font-bold text-surface">
                   <span className="h-2 w-2 rounded-full bg-surface animate-ping" />
-                  <span>RECORDING ({recordedFrames.length}/{TOTAL_FRAMES})</span>
+                  <span>RECORDING ({framesBufferRef.current.length}/{TOTAL_FRAMES})</span>
                 </div>
               )}
 
@@ -260,13 +242,18 @@ export const RecordPage: React.FC<RecordPageProps> = ({ onBackToApp }) => {
                 muted
                 className="h-full w-full object-cover -scale-x-100"
               />
+
+              <canvas
+                ref={canvasRef}
+                className="pointer-events-none absolute inset-0 h-full w-full object-cover -scale-x-100"
+              />
             </div>
 
             {/* Error or Status Alert */}
-            {errorMessage && (
+            {(cameraError || errorMessage) && (
               <div className="mt-3 flex items-center gap-2 rounded-input border border-emergency bg-emergency-bg p-3 text-xs font-semibold text-emergency">
                 <AlertCircle className="h-4 w-4 shrink-0" />
-                <span>{errorMessage}</span>
+                <span>{cameraError || errorMessage}</span>
               </div>
             )}
 
@@ -308,19 +295,18 @@ export const RecordPage: React.FC<RecordPageProps> = ({ onBackToApp }) => {
                   Target Word / Class
                 </label>
                 <span className="text-xs font-bold text-accent">
-                  {currentCount} samples recorded
+                  Existing samples: {currentCount}
                 </span>
               </div>
-
               <select
                 id="word-select"
                 value={selectedWord}
                 onChange={(e) => setSelectedWord(e.target.value)}
-                className="w-full rounded-input border border-border bg-bg px-3 py-2.5 text-sm font-semibold text-ink cursor-pointer focus-visible:outline-none min-h-[44px]"
+                className="w-full rounded-input border border-border bg-bg px-3 py-2 text-sm font-semibold text-ink focus-visible:outline-none min-h-[44px]"
               >
                 {VOCAB_WORDS.map((w) => (
                   <option key={w} value={w}>
-                    {w.toUpperCase()} {sampleCounts.byWord[w] ? `(${sampleCounts.byWord[w]} recorded)` : ''}
+                    {w} ({sampleCounts.byWord[w] || 0} samples)
                   </option>
                 ))}
               </select>
@@ -331,48 +317,63 @@ export const RecordPage: React.FC<RecordPageProps> = ({ onBackToApp }) => {
               <button
                 type="button"
                 onClick={startRecordingFlow}
-                className="w-full flex items-center justify-center gap-2 rounded-input bg-accent px-4 py-3 text-sm font-bold text-accent-ink hover:opacity-95 min-h-[48px]"
+                disabled={!isCameraActive}
+                className="w-full flex items-center justify-center gap-2 rounded-input bg-accent px-4 py-3 text-sm font-bold text-accent-ink hover:opacity-95 min-h-[48px] disabled:opacity-40"
               >
                 <Play className="h-4 w-4" />
-                <span>Start Recording ({selectedWord.toUpperCase()})</span>
+                <span>Start 3s Countdown & Record</span>
               </button>
             )}
 
+            {recordingState === 'countdown' && (
+              <div className="flex items-center justify-center rounded-input bg-bg py-3 text-sm font-bold text-warn min-h-[48px] border border-border">
+                <span>Countdown in progress...</span>
+              </div>
+            )}
+
+            {recordingState === 'recording' && (
+              <div className="flex items-center justify-center rounded-input bg-emergency py-3 text-sm font-bold text-surface min-h-[48px] animate-pulse">
+                <span>Sign {selectedWord.toUpperCase()} now!</span>
+              </div>
+            )}
+
             {recordingState === 'review' && (
-              <div className="flex flex-col gap-3">
+              <div className="flex flex-col gap-2">
                 <button
                   type="button"
                   onClick={handleSave}
-                  className="w-full flex items-center justify-center gap-2 rounded-input bg-accent px-4 py-3 text-sm font-bold text-accent-ink hover:opacity-95 min-h-[48px]"
+                  className="w-full flex items-center justify-center gap-2 rounded-input bg-ok px-4 py-3 text-sm font-bold text-surface hover:opacity-95 min-h-[48px]"
                 >
                   <Save className="h-4 w-4" />
-                  <span>Save Sample ({selectedWord})</span>
+                  <span>Save Sample ({TOTAL_FRAMES} frames)</span>
                 </button>
-
                 <button
                   type="button"
                   onClick={handleRetry}
-                  className="w-full flex items-center justify-center gap-2 rounded-input border border-border bg-surface px-4 py-3 text-sm font-semibold text-ink hover:bg-bg min-h-[48px]"
+                  className="w-full flex items-center justify-center gap-2 rounded-input border border-border bg-bg px-4 py-2 text-xs font-semibold text-ink hover:bg-surface min-h-[40px]"
                 >
-                  <RotateCcw className="h-4 w-4 text-ink-muted" />
+                  <RotateCcw className="h-4 w-4" />
                   <span>Discard & Retry</span>
                 </button>
               </div>
             )}
           </div>
 
-          {/* Guidelines Box */}
-          <div className="rounded-card border border-border bg-surface p-4 text-xs text-ink-muted space-y-2">
-            <h3 className="font-serif text-sm font-bold text-ink">
-              Data Collection Protocol
+          {/* Quick Guide Card */}
+          <div className="rounded-card border border-border bg-surface p-4 text-xs text-ink-muted">
+            <h3 className="font-serif font-bold text-ink mb-2 flex items-center gap-1.5">
+              <Layers className="h-4 w-4 text-accent" />
+              Recording Rules
             </h3>
-            <p>1. Target 40+ samples per class across at least 5 signers.</p>
-            <p>2. Keep signer ID consistent per person to allow train/val/test splits strictly by signer.</p>
-            <p>3. Use <strong className="text-ink">idle</strong> to record neutral resting poses and transition gestures.</p>
+            <ul className="space-y-1 list-disc list-inside">
+              <li>Position shoulders and upper body centered in the frame.</li>
+              <li>Wait for countdown to reach 0 before starting the gesture.</li>
+              <li>Missing hands stay strictly 0.0 (no interpolation).</li>
+              <li>Saved as (30, 225) float32 in data/landmarks/&lt;signer&gt;/&lt;label&gt;/.</li>
+            </ul>
           </div>
         </div>
       </main>
     </div>
   );
 };
-

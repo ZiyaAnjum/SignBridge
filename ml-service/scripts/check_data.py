@@ -198,6 +198,8 @@ def run_data_check(
     vocab_labels = load_vocabulary_labels()
     if words:
         target_labels = [w.strip().lower() for w in words if w.strip()]
+        if "idle" not in target_labels:
+            target_labels.append("idle")
     else:
         target_labels = vocab_labels
 
@@ -213,6 +215,14 @@ def run_data_check(
         print("Directory structure expected: data/landmarks/<signer>/<label>/sample_XXXX.npy")
         _print_readiness_summary([], {}, {}, target_labels)
         return False, {"ready": False, "samples": 0}
+
+    # Filter files if subset specified
+    if words:
+        all_files = [f for f in all_files if f.parent.name in target_labels]
+        if not all_files:
+            print(f"\n[INFO] No .npy sample files found matching specified words: {', '.join(target_labels)}")
+            _print_readiness_summary([], {}, {}, target_labels)
+            return False, {"ready": False, "samples": 0}
 
     total_files = len(all_files)
     signer_samples: Dict[str, int] = defaultdict(int)

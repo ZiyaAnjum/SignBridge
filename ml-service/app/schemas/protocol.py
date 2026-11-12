@@ -31,12 +31,16 @@ class LandmarkFrame(BaseModel):
 
 class PredictionResult(BaseModel):
     """Inference response delivered over WebSocket to frontend."""
-    label: str = Field(..., description="Predicted class label in snake_case (e.g. 'doctor', 'emergency')")
-    english: str = Field(..., description="English translated text")
-    hindi: str = Field(..., description="Hindi translated text")
-    kannada: str = Field(..., description="Kannada translated text")
-    confidence: float = Field(..., ge=0.0, le=1.0, description="Model prediction confidence score")
+    label: Optional[str] = Field(default=None, description="Predicted class label in snake_case or None if low confidence/idle")
+    english: Optional[str] = Field(default=None, description="English translated text")
+    hindi: Optional[str] = Field(default=None, description="Hindi translated text")
+    kannada: Optional[str] = Field(default=None, description="Kannada translated text")
+    confidence: float = Field(default=0.0, ge=0.0, le=1.0, description="Model prediction confidence score")
     is_emergency: bool = Field(default=False, description="Flag indicating emergency distress sign")
     top_guesses: List[TopGuess] = Field(default_factory=list, description="Top candidate predictions for low-confidence recovery")
+    model_loaded: bool = Field(default=False, description="Whether ML weights are loaded in memory")
+    state: Optional[str] = Field(default=None, description="Operational state: 'ready', 'no_signer', 'buffering', 'low_confidence'")
+    inference_latency_ms: float = Field(default=0.0, description="Inference execution latency in milliseconds")
+    reason: Optional[str] = Field(default=None, description="Reason if model is not loaded or frame skipped")
     timestamp: float = Field(default_factory=time.time)
 

@@ -7,6 +7,7 @@ from typing import Dict, List, Set
 from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel, Field
 import numpy as np
+from app.core.config import settings
 
 router = APIRouter(prefix="/samples", tags=["Samples"])
 
@@ -57,6 +58,11 @@ class SampleUploadResponse(BaseModel):
 @router.get("/counts")
 async def get_sample_counts() -> Dict[str, object]:
     """Return live per-signer and per-word sample counts from data/landmarks/."""
+    if not settings.ENABLE_RECORDING:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Data recording and sample inspection are disabled (ENABLE_RECORDING=false).",
+        )
     counts_by_word: Dict[str, int] = {}
     counts_by_signer: Dict[str, int] = {}
     total = 0
@@ -80,6 +86,11 @@ async def get_sample_counts() -> Dict[str, object]:
 @router.post("", response_model=SampleUploadResponse, status_code=status.HTTP_201_CREATED)
 async def save_sample(payload: SampleUploadPayload) -> SampleUploadResponse:
     """Validate and persist a 30-frame landmark sample array."""
+    if not settings.ENABLE_RECORDING:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Data recording is disabled (ENABLE_RECORDING=false).",
+        )
     # 1. Signer format validation
     signer = payload.signer.strip().lower()
     if not SIGNER_PATTERN.match(signer):

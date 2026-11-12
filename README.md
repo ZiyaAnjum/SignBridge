@@ -131,14 +131,36 @@ Alternatively, use the browser-based recorder at **[http://localhost:5173/record
 
 ---
 
-## 4. UI States Preview Switcher
+## 4. Live View & UI State Inspection
 
-The frontend includes an interactive **Design State Switcher** bar at the top to preview and inspect all 8 required states from [docs/DESIGN.md](docs/DESIGN.md):
-1. **Empty**: No conversation yet, clean one-line instructions.
-2. **Camera Denied**: Accessible guidance with explanation of privacy and browser permission steps.
-3. **Loading Model**: Spinner and initialization status message.
-4. **Recognising**: Signer detected, pulsating status badge, and live landmark overlay.
-5. **Low Confidence**: *"Not sure. Please sign again"* prompt displaying top 2 alternative candidate matches.
-6. **Sentence Awaiting Speech**: Built sentence preview with accessible **Confirm & Speak** and **Fix** actions.
-7. **Error / Connection Lost**: Offline status warning with manual retry.
-8. **Emergency**: High-priority full-width banner with staff dispatch and dismiss actions.
+### Live Streaming Mode
+* In the live workplace view, the browser streams landmark coordinate vectors `(225,)` to `/ws/landmarks` at **fixed 15 FPS**.
+* The server maintains a rolling 30-frame buffer per connection and runs GRU inference every 3 frames with temporal smoothing (3 of 5 windows, confidence $\ge 0.80$) and repetition lock.
+* If a model has not yet been trained or loaded, SignBridge operates in **Demo Mode**:
+  * Displays a persistent amber banner: *"Demo mode: model not trained, predictions are not real"*.
+  * Sentence confirmation and speech synthesis are locked to prevent synthetic or dummy words from entering the conversation.
+* When emergency distress signs (`emergency`, `ambulance`) are recognized at $\ge 0.90$ confidence for 3 consecutive windows, the high-priority **Emergency Alert Banner** triggers instantly and is never suppressed by word repetition locks.
+
+### Dev State Switcher
+The interactive Design State Switcher allows inspecting all states from [docs/DESIGN.md](docs/DESIGN.md) (Empty, Camera Denied, Loading Model, Recognising, Low Confidence, Sentence Awaiting Speech, Error/Offline, Emergency, No Signer).
+* **Toggle Shortcut**: Press **`Shift + D`** anywhere in the app to show or hide the Dev Inspector bar.
+* **URL Parameter**: Append `?dev=true` to the URL.
+
+---
+
+## 5. Verification & Test Commands
+
+### Run Backend Inference & Quality Tests
+```powershell
+# 1. Parity normalization test (verifies identical math with TypeScript)
+.\ml-service\.venv\python.exe ml-service/tests/test_normalization_parity.py
+
+# 2. Live inference test suite (smoothing, emergency persistence, rate limits, buffer isolation)
+.\ml-service\.venv\python.exe ml-service/tests/test_live_inference.py
+
+# 3. Model training pipeline tests (data splits, augmentation, class balancing)
+.\ml-service\.venv\python.exe ml-service/tests/test_train.py
+
+# 4. Dataset audit & readiness checks
+.\ml-service\.venv\python.exe ml-service/tests/test_check_data.py
+```

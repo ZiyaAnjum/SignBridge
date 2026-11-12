@@ -26,6 +26,21 @@ export interface PredictionPayload {
   timestamp: number;
 }
 
+export interface PredictionResult {
+  label: string | null;
+  english: string | null;
+  hindi: string | null;
+  kannada: string | null;
+  confidence: number;
+  is_emergency: boolean;
+  top_guesses: TopGuess[];
+  model_loaded: boolean;
+  state?: 'ready' | 'no_signer' | 'buffering' | 'low_confidence' | 'emergency' | 'not_loaded' | null;
+  inference_latency_ms: number;
+  reason?: string | null;
+  timestamp?: number;
+}
+
 export interface ConversationMessage {
   id: string;
   speaker: SpeakerRole;
@@ -47,5 +62,7 @@ export type UIState =
   | 'low_confidence'
   | 'confirmed_sentence'
   | 'error'
-  | 'emergency';
+  | 'emergency'
+  | 'no_signer'
+  | 'connecting';
 

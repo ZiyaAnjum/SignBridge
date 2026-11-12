@@ -1,6 +1,7 @@
 """Health check endpoints."""
 from fastapi import APIRouter
 from app.core.config import settings
+from app.ml.engine import engine
 from app.schemas.protocol import HealthResponse
 
 router = APIRouter(tags=["Health"])
@@ -14,6 +15,6 @@ async def check_health() -> HealthResponse:
         service="signbridge-ml-service",
         version="0.1.0",
         device=settings.DEVICE,
-        model_loaded=False,
+        model_loaded=engine.model_loaded,
     )
 
